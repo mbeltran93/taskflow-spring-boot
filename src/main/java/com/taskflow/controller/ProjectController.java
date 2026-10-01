@@ -7,6 +7,8 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -18,6 +20,8 @@ import java.util.List;
 @Tag(name = "Projects", description = "Gestion de proyectos")
 public class ProjectController {
 
+    private static final Logger log = LoggerFactory.getLogger(ProjectController.class);
+
     private final ProjectService projectService;
 
     public ProjectController(ProjectService projectService) {
@@ -27,12 +31,14 @@ public class ProjectController {
     @GetMapping
     @Operation(summary = "Lista todos los proyectos")
     public ResponseEntity<List<ProjectResponse>> findAll() {
+        log.info("Listando todos los proyectos");
         return ResponseEntity.ok(projectService.findAll());
     }
 
     @GetMapping("/{id}")
     @Operation(summary = "Busca un proyecto por id")
     public ResponseEntity<ProjectResponse> findById(@PathVariable Long id) {
+        log.info("Buscando proyecto id={}", id);
         return ResponseEntity.ok(projectService.findById(id));
     }
 

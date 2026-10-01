@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: taskflow-config
+  labels:
+    app: taskflow
+data:
+  # Variables no sensibles. Las sensibles (credenciales de DB, JWT_SECRET) van en un Secret
+  # aparte que NO se versiona en el repo (ver seccion "Despliegue en GCP" del README).
+  SERVER_PORT: "8080"
+  JWT_EXPIRATION_MS: "86400000"
+  SPRING_PROFILES_ACTIVE: "default"

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:tns="http://taskflow.com/soap/projects"
+           targetNamespace="http://taskflow.com/soap/projects"
+           elementFormDefault="qualified">
+
+    <!-- Contrato SOAP (contract-first) del dominio Project: expone en forma simple -->
+    <!-- lo mismo que ya existe via REST en ProjectController, para demostrar que   -->
+    <!-- REST y SOAP conviven sobre el mismo dominio/servicio.                     -->
+
+    <xs:element name="getProjectByIdRequest">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="id" type="xs:long"/>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+
+    <xs:element name="getProjectByIdResponse">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="project" type="tns:project"/>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+
+    <xs:element name="listProjectsRequest">
+        <xs:complexType>
+            <xs:sequence/>
+        </xs:complexType>
+    </xs:element>
+
+    <xs:element name="listProjectsResponse">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="project" type="tns:project" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+
+    <xs:complexType name="project">
+        <xs:sequence>
+            <xs:element name="id" type="xs:long"/>
+            <xs:element name="name" type="xs:string"/>
+            <xs:element name="description" type="xs:string" minOccurs="0"/>
+            <xs:element name="ownerId" type="xs:long"/>
+            <xs:element name="createdAt" type="xs:dateTime"/>
+        </xs:sequence>
+    </xs:complexType>
+
+</xs:schema>

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskflow-api
+  labels:
+    app: taskflow
+spec:
+  # LoadBalancer para exponerlo con una IP publica directa en GKE (simple, para portafolio).
+  # En un cluster real seria mas comun ClusterIP + Ingress/Gateway; se deja documentado en el
+  # README como alternativa.
+  type: LoadBalancer
+  selector:
+    app: taskflow
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Incluye el traceId/requestId (puesto en el MDC por TraceIdFilter) en TODOS los logs
+         de la request; si no hay uno en curso (arranque de la app, jobs, etc.) queda vacio. -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [traceId=%X{traceId:-}] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <logger name="com.taskflow" level="INFO"/>
+
+</configuration>

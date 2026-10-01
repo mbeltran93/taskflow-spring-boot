@@ -1,8 +1,10 @@
 # TaskFlow API (Java + Spring Boot)
 
-API REST de gestion de tareas y proyectos tipo Trello/Jira reducido. Es parte de un portafolio
-comparativo: el mismo dominio y el mismo contrato de API implementados con distintas tecnologias
-backend; esta es la version en **Java 17 + Spring Boot 3**.
+![CI](https://github.com/mbeltran93/taskflow-spring-boot/actions/workflows/ci.yml/badge.svg)
+
+API REST (y SOAP) de gestion de tareas y proyectos tipo Trello/Jira reducido. Es parte de un
+portafolio comparativo: el mismo dominio y el mismo contrato de API implementados con distintas
+tecnologias backend; esta es la version en **Java 17 + Spring Boot 3**.
 
 ## Que hace
 
@@ -13,6 +15,8 @@ Permite:
 - Crear tareas dentro de un proyecto, asignarlas a un usuario, ponerles fecha limite y moverlas
   entre los estados `TODO`, `IN_PROGRESS` y `DONE`.
 - Listar y filtrar tareas por proyecto y/o estado.
+- Consultar el dominio Project tambien por **SOAP** (ver seccion dedicada mas abajo), ademas del
+  REST de siempre.
 
 Las lecturas (`GET`) son publicas; las escrituras (`POST`/`PUT`/`PATCH`/`DELETE`) requieren un
 JWT valido en el header `Authorization: Bearer <token>`.
@@ -30,6 +34,8 @@ dto/          -> records de entrada/salida, nunca se exponen las entidades direc
 security/     -> JwtService (genera/valida tokens) y JwtAuthFilter (filtro que autentica cada request)
 config/       -> SecurityConfig (reglas de autorizacion) y OpenApiConfig (Swagger)
 exception/    -> excepciones de dominio + @RestControllerAdvice centralizado (GlobalExceptionHandler)
+soap/         -> endpoint SOAP (Spring-WS) sobre el mismo dominio Project; ver "SOAP" mas abajo
+tracing/      -> TraceIdFilter: traceId/requestId por request en el MDC; ver "Trazabilidad"
 ```
 
 Puntos de diseño:
@@ -43,6 +49,91 @@ Puntos de diseño:
   `DuplicateResourceException` -> 409, `InvalidCredentialsException` -> 401, errores de
   validacion de Bean Validation -> 400 con el detalle de cada campo.
 - **DTOs como Java records**: inmutables, sin boilerplate de getters/setters.
+
+## SOAP (ademas de REST)
+
+Para demostrar que el mismo servicio puede exponer **REST y SOAP** sobre el mismo dominio
+(literalmente lo que pide un perfil que menciona "REST and SOAP APIs"), el dominio `Project` se
+expone tambien por SOAP con [Spring-WS](https://docs.spring.io/spring-ws/docs/current/reference/),
+**contract-first**:
+
+- El contrato es el XSD en [`src/main/resources/xsd/projects.xsd`](src/main/resources/xsd/projects.xsd),
+  con dos operaciones: `getProjectById` y `listProjects`.
+- Las clases Java (JAXB) se generan a partir de ese XSD en build-time con el
+  `jaxb2-maven-plugin` (`mvn generate-sources`, o automatico al compilar) - no se escriben a
+  mano ni se versionan, viven en `target/generated-sources/jaxb`. El XSD es la unica fuente de
+  verdad del contrato.
+- `WebServiceConfig` expone el WSDL (auto-generado del XSD) en `http://localhost:8080/ws/projects.wsdl`
+  y el endpoint SOAP en `http://localhost:8080/ws`.
+- `ProjectSoapEndpoint` (`@Endpoint`) reusa el mismo `ProjectService` que usa el `ProjectController`
+  REST: no hay logica de negocio duplicada, solo traduccion entre el modelo SOAP (JAXB) y el DTO
+  interno.
+- Un proyecto inexistente devuelve un SOAP Fault real (`ProjectNotFoundSoapException` +
+  `@SoapFault`), no un 200 con error en el body.
+- El endpoint SOAP es de solo lectura y publico (`/ws/**` esta permitido en `SecurityConfig`,
+  igual que los `GET` de la API REST).
+
+**Probado con un cliente SOAP real**, no solo "compila": `ProjectSoapEndpointIT` usa un
+`WebServiceTemplate` de Spring-WS contra la app completa levantada en un puerto aleatorio
+(serializa/deserializa XML de verdad sobre HTTP), cubriendo `getProjectById` (caso exitoso y
+caso 404 -> SOAP Fault) y `listProjects`. Ademas se probo a mano con un envelope SOAP crudo por
+curl:
+
+```bash
+curl -X POST http://localhost:8080/ws -H "Content-Type: text/xml" --data @- <<'EOF'
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:proj="http://taskflow.com/soap/projects">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <proj:getProjectByIdRequest>
+      <proj:id>1</proj:id>
+    </proj:getProjectByIdRequest>
+  </soapenv:Body>
+</soapenv:Envelope>
+EOF
+```
+
+que devuelve (ejecutado de verdad contra la app corriendo con `docker compose up`):
+
+```xml
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Header/><SOAP-ENV:Body><ns2:getProjectByIdResponse xmlns:ns2="http://taskflow.com/soap/projects"><ns2:project><ns2:id>1</ns2:id><ns2:name>Smoke Project</ns2:name><ns2:description>demo</ns2:description><ns2:ownerId>1</ns2:ownerId><ns2:createdAt>2026-10-01T17:09:04.285Z</ns2:createdAt></ns2:project></ns2:getProjectByIdResponse></SOAP-ENV:Body></SOAP-ENV:Envelope>
+```
+
+y con un id inexistente responde un SOAP Fault real:
+
+```xml
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Header/><SOAP-ENV:Body><SOAP-ENV:Fault><faultcode>SOAP-ENV:Client</faultcode><faultstring xml:lang="en">Proyecto no encontrado</faultstring></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>
+```
+
+## Trazabilidad (traceId / requestId)
+
+`TraceIdFilter` (un `Filter` registrado con la maxima precedencia, antes que la cadena de Spring
+Security) intercepta cada request HTTP (REST y SOAP por igual, ya que es un filtro de servlet a
+nivel `/*`):
+
+1. Si el cliente ya manda un header `X-Request-Id` o `X-Trace-Id`, lo reusa (propagacion entre
+   servicios).
+2. Si no, genera un `UUID` nuevo.
+3. Lo deja en el **MDC de SLF4J** (`traceId`) durante todo el ciclo de vida del request, asi
+   **todos los logs que se emiten mientras se procesa ese request lo incluyen** (ver el patron
+   en `logback-spring.xml`: `[traceId=%X{traceId}]`), y lo limpia al final (`finally`) para que
+   no se filtre a otro request en el mismo hilo del pool.
+4. Devuelve el mismo valor en la respuesta, en ambos headers (`X-Request-Id` y `X-Trace-Id`), para
+   que el cliente pueda correlacionar.
+
+Probado con requests reales (test de integracion `TraceIdFilterIT`, y a mano por curl contra
+`docker compose up`). Ejemplo real de logs de la app corriendo en Docker, mostrando el traceId
+propagado y uno generado, en REST y en SOAP:
+
+```
+2026-10-01 18:17:19.207 INFO  [http-nio-8080-exec-2] [traceId=demo-trace-abc123] c.t.controller.ProjectController - Listando todos los proyectos
+2026-10-01 18:17:19.380 INFO  [http-nio-8080-exec-4] [traceId=daf989cc-ef38-407f-bc01-9c8ef8a657ad] c.t.controller.ProjectController - Listando todos los proyectos
+2026-10-01 18:17:32.522 INFO  [http-nio-8080-exec-5] [traceId=soap-curl-demo-1] c.t.s.endpoint.ProjectSoapEndpoint - [SOAP] getProjectById id=3
+```
+
+La primera linea corresponde a `curl http://localhost:8080/api/projects -H "X-Request-Id: demo-trace-abc123"`
+(se propaga el id del cliente); la segunda a la misma request sin header (se genera un UUID); la
+tercera a una llamada SOAP con `X-Request-Id: soap-curl-demo-1` (el mismo filtro aplica a SOAP,
+no solo a REST).
 
 ## Como correrlo
 
@@ -61,6 +152,7 @@ Esto levanta:
 
 Swagger UI: `http://localhost:8080/swagger-ui.html`
 Salud: `http://localhost:8080/actuator/health`
+WSDL del servicio SOAP: `http://localhost:8080/ws/projects.wsdl`
 
 ### Correrlo sin Docker (desarrollo local)
 
@@ -143,6 +235,8 @@ en `http://localhost:8080/v3/api-docs`).
 | PUT | `/api/tasks/{id}` | JWT | Actualiza una tarea |
 | PATCH | `/api/tasks/{id}/status` | JWT | Cambia solo el estado de una tarea |
 | DELETE | `/api/tasks/{id}` | JWT | Elimina una tarea |
+| GET | `/ws/projects.wsdl` | No | WSDL del servicio SOAP (auto-generado del XSD) |
+| POST | `/ws` | No | Endpoint SOAP: `getProjectByIdRequest` / `listProjectsRequest` (ver seccion "SOAP") |
 
 ### Ejemplo de uso con curl
 
@@ -212,8 +306,131 @@ Las migraciones Flyway (`V1__init_schema.sql`) crean las tablas, las foreign key
 (`ON DELETE CASCADE` para project->task y owner->project, `ON DELETE SET NULL` para el
 assignee de una tarea) y los indices sobre las columnas mas consultadas.
 
+## CI/CD (GitHub Actions)
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre automaticamente en cada `push` y
+`pull_request` contra `main` (eso es lo que muestra el badge de arriba), con tres jobs
+independientes:
+
+| Job | Que hace |
+|---|---|
+| `test` | `mvn -B test`: compila y corre los 49+ tests (unitarios + integracion) |
+| `docker-build` | `docker build` de la imagen (sin pushearla a ningun registry) para confirmar que el `Dockerfile` sigue sano; corre despues de `test` |
+| `codeql` | Analisis de seguridad estatico con [CodeQL](https://codeql.github.com/) (`github/codeql-action`) sobre el codigo Java, gratis para repos publicos |
+
+No hace falta ningun secreto ni configuracion extra para que corra: se activa solo al pushear
+(este repo es publico, asi que CodeQL no requiere licencia). El YAML se valido sintacticamente
+con `python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` (no se pudo
+correr `act` localmente porque no esta instalado en esta maquina); los tres jobs tambien se
+ejecutaron a mano en local con los mismos comandos que usa el workflow (`mvn test`, `docker
+build`) para confirmar que son correctos antes de confiar en que GitHub Actions los corra igual.
+
+## Despliegue en GCP
+
+Documentacion + manifiestos **validados localmente**, sin desplegar de verdad (no hay cuenta/
+billing de GCP configurado en esta maquina). Dos caminos, de mas simple a mas completo:
+
+### Opcion simple: Cloud Run
+
+Cloud Run es la forma mas directa de correr un container sin administrar cluster. Con
+`gcloud` autenticado y un proyecto de GCP con billing habilitado:
+
+```bash
+# 1. Build + push de la imagen a Artifact Registry (una vez creado el repo con
+#    `gcloud artifacts repositories create taskflow --repository-format=docker --location=us-central1`)
+gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT_ID/taskflow/taskflow:latest
+
+# 2. Crear la base de datos administrada (una vez)
+gcloud sql instances create taskflow-db --database-version=POSTGRES_16 --tier=db-f1-micro --region=us-central1
+gcloud sql databases create taskflow --instance=taskflow-db
+gcloud sql users set-password postgres --instance=taskflow-db --password=<password-seguro>
+
+# 3. Secretos (JWT_SECRET y credenciales de DB), nunca en el YAML ni en el repo
+echo -n "<secreto-largo-y-aleatorio>" | gcloud secrets create taskflow-jwt-secret --data-file=-
+echo -n "<password-de-postgres>" | gcloud secrets create taskflow-db-password --data-file=-
+
+# 4. Deploy
+gcloud run deploy taskflow \
+  --image us-central1-docker.pkg.dev/PROJECT_ID/taskflow/taskflow:latest \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --add-cloudsql-instances PROJECT_ID:us-central1:taskflow-db \
+  --set-env-vars "DB_URL=jdbc:postgresql:///taskflow?cloudSqlInstance=PROJECT_ID:us-central1:taskflow-db&socketFactory=com.google.cloud.sql.postgres.SocketFactory,DB_USERNAME=postgres" \
+  --set-secrets "DB_PASSWORD=taskflow-db-password:latest,JWT_SECRET=taskflow-jwt-secret:latest"
+```
+
+Variables/secrets que necesita Cloud Run: `DB_URL`, `DB_USERNAME` (env vars, no sensibles salvo
+por apuntar a la instancia), y `DB_PASSWORD`/`JWT_SECRET` como Secret Manager (`--set-secrets`,
+nunca en texto plano en el comando de deploy en un pipeline real).
+
+### Opcion GKE: Kubernetes
+
+Para un despliegue mas parecido a lo que pide un cluster administrado (GKE), los manifiestos
+estan en [`k8s/`](k8s/):
+
+| Archivo | Contiene |
+|---|---|
+| `k8s/configmap.yaml` | Env vars **no sensibles**: `SERVER_PORT`, `JWT_EXPIRATION_MS`, `SPRING_PROFILES_ACTIVE` |
+| `k8s/deployment.yaml` | 2 replicas de la app, probes de `/actuator/health`, variables sensibles inyectadas desde un `Secret` (`taskflow-secrets`, no versionado) |
+| `k8s/service.yaml` | `Service` tipo `LoadBalancer` exponiendo el puerto 80 -> 8080 |
+
+Comandos reales para un cluster GKE existente:
+
+```bash
+# 1. Cluster (una vez)
+gcloud container clusters create-auto taskflow-cluster --region us-central1
+
+# 2. Imagen en Artifact Registry (igual que en Cloud Run)
+gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT_ID/taskflow/taskflow:latest
+
+# 3. Secret con las variables sensibles (NO se versiona; se crea una sola vez por cluster/entorno)
+kubectl create secret generic taskflow-secrets \
+  --from-literal=DB_URL=jdbc:postgresql://<ip-privada-cloud-sql>:5432/taskflow \
+  --from-literal=DB_USERNAME=taskflow \
+  --from-literal=DB_PASSWORD=<password-seguro> \
+  --from-literal=JWT_SECRET=<secreto-largo-y-aleatorio>
+
+# 4. Apuntar deployment.yaml a la imagen real (reemplazar gcr.io/PROJECT_ID/taskflow:latest) y aplicar
+kubectl apply -f k8s/
+
+# 5. Ver la IP publica asignada por el LoadBalancer
+kubectl get service taskflow-api
+```
+
+**Validacion local sin cluster real** (lo que pide la consigna: "no hace falta un cluster real"):
+`kubectl apply --dry-run=client -f k8s/` necesita igual un API server para resolver el
+`RESTMapper` (en esta maquina, sin ningun contexto de kubeconfig configurado, falla con
+`connection refused` contra `localhost:8080`, el default de client-go cuando no hay cluster
+alguno). Para validar los tres manifiestos sin desplegar de verdad se uso un cluster **local**
+descartable con [`kind`](https://kind.sigs.k8s.io/) (Kubernetes-in-Docker, se crea y se borra en
+minutos, sin tocar GCP):
+
+```
+$ kubectl apply --dry-run=client -f k8s/
+configmap/taskflow-config created (dry run)
+deployment.apps/taskflow-api created (dry run)
+service/taskflow-api created (dry run)
+
+$ kubectl apply --dry-run=server -f k8s/
+configmap/taskflow-config created (server dry run)
+deployment.apps/taskflow-api created (server dry run)
+service/taskflow-api created (server dry run)
+```
+
+Ambos comandos (client-side y server-side) terminaron sin errores contra un API server real
+(Kubernetes 1.31 via `kind`), confirmando que los tres YAML son schema-validos. Adicionalmente
+se corrio una validacion 100% offline (sin ningun cluster, ni siquiera `kind`) con la libreria
+`kubernetes-validate` (valida contra el OpenAPI de Kubernetes 1.30 embebido, en modo `strict`
+que rechaza campos desconocidos) para los tres archivos, con resultado `OK` en los tres.
+
 ## Limitaciones conocidas
 
+- El SOAP de `Project` es de solo lectura (`getProjectById`/`listProjects`) y no requiere JWT,
+  igual que los `GET` del REST: el objetivo es demostrar la convivencia REST+SOAP sobre el mismo
+  dominio, no migrar todo el contrato a SOAP.
+- El despliegue a GCP (Cloud Run/GKE) es documentacion + manifiestos validados localmente (con
+  `kind` y `kubernetes-validate`, ver seccion "Despliegue en GCP"): no se desplego de verdad
+  porque esta maquina no tiene cuenta/billing de GCP configurado.
 - No hay roles/permisos finos: cualquier usuario autenticado puede crear/editar/borrar cualquier
   proyecto o tarea (no solo las propias). Se prioriza dejar clara la mecanica de JWT sobre un
   modelo de autorizacion granular.
