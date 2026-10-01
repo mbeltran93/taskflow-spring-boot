@@ -96,14 +96,28 @@ Incluye:
   H2 en memoria en modo compatibilidad PostgreSQL, cubriendo el flujo real
   registro -> login -> crear proyecto -> crear tarea -> cambiar status -> filtrar -> borrar, mas
   los casos de error (401/403/404/409/400).
+- **Tests parametrizados de validacion** (`RequestValidationParamIT`): recorren con
+  `@ParameterizedTest` muchas combinaciones invalidas de cada DTO de entrada (nombre vacio, email
+  con formato invalido, password corta, campos que exceden el `@Size` maximo, ids nulos, etc.)
+  para los endpoints de registro, login, proyectos y tareas, verificando en cada caso el 400 y
+  el campo que aparece en el detalle del error.
+- **Test de concurrencia** (`ConcurrentTaskOperationsIT`): dispara ~20 requests en paralelo con
+  un `ExecutorService` (creacion de tareas sobre el mismo proyecto y cambios de status sobre la
+  misma tarea) para verificar que no se pierden escrituras, no se generan ids duplicados y el
+  servidor responde de forma consistente bajo acceso simultaneo.
 
-> Nota sobre Testcontainers: se evaluo usar Testcontainers con un Postgres real para los tests de
-> integracion (como pide la consigna "si podes"), pero en esta máquina Windows el cliente
-> `docker-java` que trae Testcontainers 1.20.x no logra hablar con el pipe que expone Docker
-> Desktop (`BadRequestException Status 400` al listar el daemon), aunque `docker` y
-> `docker compose` funcionan perfectamente. Se opto por la alternativa que la propia consigna
-> habilita explicitamente: H2 + `@AutoConfigureMockMvc`, que da la misma cobertura de los
-> controllers sin depender de esa integracion especifica del entorno.
+> Nota sobre Testcontainers: la consigna original pedia usar Testcontainers con un Postgres real
+> "si se puede". En esta maquina Windows el cliente `docker-java` que trae Testcontainers no
+> logra hablar con el pipe que expone Docker Desktop (`BadRequestException Status 400` al listar
+> el daemon), aunque `docker` y `docker compose` funcionan perfectamente. Se volvio a probar el
+> 2026-10-01, despues de liberar espacio en disco y reinstalar/reiniciar Docker Desktop (ahora
+> Docker Desktop 4.56 / Engine 29.1.3), incluyendo con la ultima version de Testcontainers
+> (1.21.3) y probando explicitamente los pipes `docker_cli` y `docker_engine`: el mismo error
+> persiste. No es entonces un problema de espacio en disco sino de como esta instalacion de
+> Docker Desktop expone el daemon por named pipe al cliente Java (`docker compose` funciona
+> porque usa el binario oficial de Docker, no `docker-java`). Se mantiene la alternativa que la
+> propia consigna habilita explicitamente: H2 + `@AutoConfigureMockMvc`, que da la misma
+> cobertura de los controllers sin depender de esa integracion especifica del entorno.
 
 ## Documentacion de la API
 
@@ -159,6 +173,31 @@ curl -X PATCH http://localhost:8080/api/tasks/1/status \
   -d '{"status":"IN_PROGRESS"}'
 ```
 
+### Coleccion de Postman
+
+El archivo [`postman_collection.json`](./postman_collection.json) en la raiz del repo tiene el
+mismo flujo de arriba ya armado, mas un par de casos de error:
+
+1. En Postman: **File > Import** y seleccionar `postman_collection.json` (o arrastrarlo a la
+   ventana de Postman).
+2. La coleccion trae su variable `baseUrl` en `http://localhost:8080`; si la API corre en otro
+   puerto/host, editarla en **Collection > Variables**.
+3. Correr la carpeta **"Flujo completo"** de arriba hacia abajo (a mano, request por request, o
+   con el boton **Run** del Collection Runner). El request **"2. Login"** tiene un test script
+   que guarda el JWT devuelto en la variable de coleccion `{{token}}`, y los requests siguientes
+   que necesitan autenticacion ya la usan solos en su header `Authorization: Bearer {{token}}` -
+   no hay que copiar/pegar el token a mano. De la misma forma, `ownerId`, `projectId` y `taskId`
+   se van completando solos a medida que cada request crea el recurso correspondiente.
+4. La carpeta **"Casos de error"** tiene un POST sin token (401/403 esperado) y un GET a un id
+   inexistente (404 esperado), independientes del flujo principal.
+
+Tambien se puede correr toda la coleccion desde la terminal con
+[Newman](https://www.npmjs.com/package/newman) (no requiere instalarlo, `npx` lo descarga al vuelo):
+
+```bash
+npx newman run postman_collection.json
+```
+
 ## Modelo de datos
 
 ```
@@ -181,7 +220,8 @@ assignee de una tarea) y los indices sobre las columnas mas consultadas.
 - El endpoint de registro (`POST /api/users`) es publico y no estaba en el contrato original del
   portafolio; se agrego porque sin el no habria forma de crear cuentas para loguearse.
 - Los tests de integracion usan H2 en modo compatibilidad PostgreSQL en vez de un Postgres real
-  via Testcontainers, por la incompatibilidad de entorno descripta mas arriba.
+  via Testcontainers, por la incompatibilidad de entorno descripta mas arriba (reconfirmada el
+  2026-10-01 tras reinstalar Docker Desktop).
 - No hay paginación en los listados (`GET /api/users`, `/api/projects`, `/api/tasks`): para el
   alcance de este portafolio se devuelven completos.
 - No hay refresh tokens: el JWT expira (24h por default) y hay que volver a loguearse.

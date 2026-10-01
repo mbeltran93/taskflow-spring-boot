@@ -1,0 +1,427 @@
+{
+  "info": {
+    "_postman_id": "9b2b7a2b-2d7a-4a7b-9b6b-taskflow0001",
+    "name": "TaskFlow API",
+    "description": "Coleccion de la API de TaskFlow (Java + Spring Boot). Cubre el flujo completo: registro, login (el token se guarda solo en la variable de coleccion {{token}}), CRUD de proyectos, CRUD de tareas, cambio de status y un par de casos de error (401 sin token, 404 recurso inexistente).\n\nCorrer la carpeta \"Flujo completo\" de arriba hacia abajo con Collection Runner para ver el escenario entero funcionando.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "testEmail", "value": "", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "ownerId", "value": "", "type": "string" },
+    { "key": "projectId", "value": "", "type": "string" },
+    { "key": "taskId", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Flujo completo",
+      "item": [
+        {
+          "name": "1. Registrar usuario",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Genera un email unico una sola vez por corrida de la coleccion,",
+                  "// asi el registro no choca con un 409 (email duplicado) en reruns.",
+                  "if (!pm.collectionVariables.get('testEmail')) {",
+                  "    pm.collectionVariables.set('testEmail', 'postman-' + Date.now() + '@taskflow.dev');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('devuelve el id del usuario', () => pm.expect(body.id).to.be.a('number'));",
+                  "pm.collectionVariables.set('ownerId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Usuario Postman\",\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/users", "host": [ "{{baseUrl}}" ], "path": [ "api", "users" ] },
+            "description": "Registra un usuario nuevo. No requiere JWT."
+          }
+        },
+        {
+          "name": "2. Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('devuelve un token', () => pm.expect(body.token).to.be.a('string').and.not.empty);",
+                  "",
+                  "// Guarda el token en la variable de coleccion para que el resto de los",
+                  "// requests que necesitan JWT lo usen automaticamente via {{token}}.",
+                  "pm.collectionVariables.set('token', body.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] },
+            "description": "Login con el usuario registrado en el paso anterior. El test script guarda el JWT en {{token}}."
+          }
+        },
+        {
+          "name": "3. Crear proyecto",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('nombre correcto', () => pm.expect(body.name).to.eql('Proyecto Postman'));",
+                  "pm.collectionVariables.set('projectId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Proyecto Postman\",\n  \"description\": \"Creado desde la coleccion de Postman\",\n  \"ownerId\": {{ownerId}}\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/projects", "host": [ "{{baseUrl}}" ], "path": [ "api", "projects" ] },
+            "description": "Requiere JWT. Guarda el id del proyecto creado en {{projectId}}."
+          }
+        },
+        {
+          "name": "4. Listar proyectos",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('devuelve un array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/projects", "host": [ "{{baseUrl}}" ], "path": [ "api", "projects" ] },
+            "description": "Lectura publica, no requiere JWT."
+          }
+        },
+        {
+          "name": "5. Obtener proyecto por id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('id coincide', () => pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get('projectId'))));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/projects/{{projectId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "projects", "{{projectId}}" ] }
+          }
+        },
+        {
+          "name": "6. Editar proyecto",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('nombre actualizado', () => pm.expect(pm.response.json().name).to.eql('Proyecto Postman v2'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Proyecto Postman v2\",\n  \"description\": \"Actualizado desde la coleccion de Postman\",\n  \"ownerId\": {{ownerId}}\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/projects/{{projectId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "projects", "{{projectId}}" ] },
+            "description": "Requiere JWT."
+          }
+        },
+        {
+          "name": "7. Crear tarea",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('arranca en TODO', () => pm.expect(body.status).to.eql('TODO'));",
+                  "pm.collectionVariables.set('taskId', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Tarea de Postman\",\n  \"description\": \"Creada desde la coleccion de Postman\",\n  \"projectId\": {{projectId}}\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/tasks", "host": [ "{{baseUrl}}" ], "path": [ "api", "tasks" ] },
+            "description": "Requiere JWT. Guarda el id de la tarea creada en {{taskId}}."
+          }
+        },
+        {
+          "name": "8. Listar tareas del proyecto",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('incluye la tarea creada', () => {",
+                  "    const ids = pm.response.json().map(t => t.id);",
+                  "    pm.expect(ids).to.include(Number(pm.collectionVariables.get('taskId')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/tasks?projectId={{projectId}}",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "api", "tasks" ],
+              "query": [ { "key": "projectId", "value": "{{projectId}}" } ]
+            },
+            "description": "Lectura publica, filtrable por projectId y/o status."
+          }
+        },
+        {
+          "name": "9. Obtener tarea por id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('titulo correcto', () => pm.expect(pm.response.json().title).to.eql('Tarea de Postman'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/tasks/{{taskId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "tasks", "{{taskId}}" ] }
+          }
+        },
+        {
+          "name": "10. Editar tarea",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('titulo actualizado', () => pm.expect(pm.response.json().title).to.eql('Tarea de Postman (editada)'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Tarea de Postman (editada)\",\n  \"description\": \"Editada desde la coleccion de Postman\",\n  \"projectId\": {{projectId}}\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/tasks/{{taskId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "tasks", "{{taskId}}" ] },
+            "description": "Requiere JWT."
+          }
+        },
+        {
+          "name": "11. Cambiar status de la tarea",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('queda en IN_PROGRESS', () => pm.expect(pm.response.json().status).to.eql('IN_PROGRESS'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"IN_PROGRESS\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/tasks/{{taskId}}/status", "host": [ "{{baseUrl}}" ], "path": [ "api", "tasks", "{{taskId}}", "status" ] },
+            "description": "Requiere JWT. Cambia solo el campo status (TODO / IN_PROGRESS / DONE)."
+          }
+        },
+        {
+          "name": "12. Borrar tarea",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [ { "key": "Authorization", "value": "Bearer {{token}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/tasks/{{taskId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "tasks", "{{taskId}}" ] },
+            "description": "Requiere JWT."
+          }
+        },
+        {
+          "name": "13. Borrar proyecto",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [ { "key": "Authorization", "value": "Bearer {{token}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/projects/{{projectId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "projects", "{{projectId}}" ] },
+            "description": "Requiere JWT. Se borra al final, despues de haber borrado ya la tarea que le pertenecia."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Casos de error",
+      "item": [
+        {
+          "name": "Crear proyecto sin token -> 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 o 403 (no autenticado)', () => {",
+                  "    pm.expect([401, 403]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sin auth\",\n  \"description\": \"no deberia crearse\",\n  \"ownerId\": 1\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/projects", "host": [ "{{baseUrl}}" ], "path": [ "api", "projects" ] },
+            "description": "No manda header Authorization: la escritura esta protegida por JWT y debe ser rechazada."
+          }
+        },
+        {
+          "name": "Obtener proyecto inexistente -> 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('cuerpo de error tiene el shape de ApiError', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property('status', 404);",
+                  "    pm.expect(body).to.have.property('path');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/projects/999999999", "host": [ "{{baseUrl}}" ], "path": [ "api", "projects", "999999999" ] },
+            "description": "Id que no existe en la base: debe devolver 404 con el ApiError estandar."
+          }
+        }
+      ]
+    }
+  ]
+}
